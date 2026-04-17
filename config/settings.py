@@ -17,7 +17,7 @@ APP_TITLE = "TeleTriage IGD System"
 APP_ICON = "🚑"
 ORGANIZATION_DEFAULT = "TeleTriage IGD"
 
-API_HOST = os.getenv("TELETRIAGE_API_HOST", "http://backend:8000")
+API_HOST = os.getenv("TELETRIAGE_API_HOST", "127.0.0.1")
 API_PORT = int(os.getenv("TELETRIAGE_API_PORT", "8000"))
 API_BASE_URL = os.getenv("TELETRIAGE_API_BASE_URL", f"http://{API_HOST}:{API_PORT}")
 STREAMLIT_HOST = os.getenv("TELETRIAGE_STREAMLIT_HOST", "http://backend:8000")
