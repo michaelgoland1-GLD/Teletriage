@@ -6,6 +6,13 @@ DATA_DIR = BASE_DIR / "data"
 UPLOAD_DIR = DATA_DIR / "uploads"
 DB_PATH = DATA_DIR / "teletriage.db"
 
+# PostgreSQL settings
+DB_HOST = os.getenv("TELETRIAGE_DB_HOST", "localhost")
+DB_PORT = int(os.getenv("TELETRIAGE_DB_PORT", "5432"))
+DB_NAME = os.getenv("TELETRIAGE_DB_NAME", "teletriage")
+DB_USER = os.getenv("TELETRIAGE_DB_USER", "teletriage_user")
+DB_PASSWORD = os.getenv("TELETRIAGE_DB_PASSWORD", "password")
+
 APP_TITLE = "TeleTriage IGD System"
 APP_ICON = "🚑"
 ORGANIZATION_DEFAULT = "TeleTriage IGD"

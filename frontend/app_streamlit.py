@@ -213,11 +213,8 @@ def patient_page() -> None:
         with c2:
             complaint = st.text_area("Keluhan utama", height=120)
             pregnancy = st.checkbox("Sedang hamil / kemungkinan hamil", value=False)
-            location_text = st.text_input("Lokasi pasien / alamat")
         with c3:
             emergency_phone = st.text_input("Nomor darurat", value=DEFAULT_EMERGENCY_PHONE)
-            gps_lat = st.text_input("Latitude (opsional)")
-            gps_lon = st.text_input("Longitude (opsional)")
 
         st.markdown("### Gejala")
         symptoms = st.multiselect("Pilih gejala", [
@@ -240,7 +237,7 @@ def patient_page() -> None:
             risk_factors = [x for x in risk_factors if x != "Tidak ada faktor risiko yang diketahui"]
 
         st.markdown("### Pemeriksaan awal")
-        mode = st.radio("Mode input", ["Awam / keluarga pasien", "Medis / tenaga kesehatan"], horizontal=True)
+        mode = st.radio("Mode input", ["Awam / keluarga pasien"], horizontal=True)
         vitals: Dict[str, Any] = {}
         if mode == "Awam / keluarga pasien":
             v1, v2, v3 = st.columns(3)
@@ -266,21 +263,6 @@ def patient_page() -> None:
             if spo2 is None:
                 breath_score = 0 if breath_simple == "Tidak" else 1 if breath_simple == "Ya, ringan" else 2 if breath_simple == "Ya, sedang" else 3
                 spo2 = 98 if breath_score == 0 else 95 if breath_score == 1 else 92 if breath_score == 2 else 88
-            vitals = {"spo2": spo2, "heart_rate": hr, "respiratory_rate": rr, "sbp": sbp, "dbp": dbp, "temperature": temp, "gcs": gcs, "pain_score": pain_score}
-        else:
-            v1, v2, v3 = st.columns(3)
-            with v1:
-                spo2 = st.number_input("SpO2 (%)", min_value=0, max_value=100, value=98, step=1)
-                hr = st.number_input("Nadi / menit", min_value=0, max_value=250, value=80, step=1)
-                rr = st.number_input("RR / menit", min_value=0, max_value=60, value=18, step=1)
-            with v2:
-                sbp = st.number_input("Sistolik (mmHg)", min_value=0, max_value=300, value=120, step=1)
-                dbp = st.number_input("Diastolik (mmHg)", min_value=0, max_value=200, value=80, step=1)
-                temp = st.number_input("Suhu (°C)", min_value=30.0, max_value=45.0, value=36.8, step=0.1)
-            with v3:
-                gcs = st.number_input("GCS", min_value=3, max_value=15, value=15, step=1)
-                pain_score = st.number_input("Nyeri (0-10)", min_value=0, max_value=10, value=0, step=1)
-                breath_simple = st.radio("Kondisi napas", ["Tidak", "Ringan", "Sedang", "Berat"])
             vitals = {"spo2": spo2, "heart_rate": hr, "respiratory_rate": rr, "sbp": sbp, "dbp": dbp, "temperature": temp, "gcs": gcs, "pain_score": pain_score}
 
         uploaded_file = st.file_uploader("Foto kondisi pasien (opsional)", type=["jpg", "jpeg", "png", "webp"])
@@ -309,10 +291,6 @@ def patient_page() -> None:
             "vitals": vitals,
             "photo_meta": photo_meta,
             "image_path": photo_path,
-            "location_text": location_text.strip(),
-            "gps_lat": float(gps_lat) if str(gps_lat).strip() else None,
-            "gps_lon": float(gps_lon) if str(gps_lon).strip() else None,
-            "gps_accuracy": None,
             "emergency_phone": emergency_phone.strip() or DEFAULT_EMERGENCY_PHONE,
         }
         result = api_post("/patients", payload)
