@@ -213,7 +213,7 @@ async def gps_update(payload: GPSUpdateRequest) -> Dict[str, Any]:
         "lon": payload.lon,
         "accuracy": payload.accuracy,
     })
-    return updated
+    return {"success": True, "message": "GPS updated successfully"}
 
 
 @app.get("/map-data")

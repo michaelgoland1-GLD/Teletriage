@@ -191,7 +191,7 @@ def patient_page() -> None:
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Level", triage["level"])
         c2.metric("Label", triage["label"])
-        c3.metric("Skor", triage["score"])
+        c3.metric("Sumber Daya", triage["estimated_resources"])
         c4.metric("Ambulans", "YA" if triage["ambulance_now"] else "TIDAK")
         st.info(triage["urgency_text"])
         st.write("**Ringkasan:**", triage["summary"])
