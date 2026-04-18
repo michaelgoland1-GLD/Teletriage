@@ -343,7 +343,8 @@ ESI_1_FLAGS = [
 # ESI 2: Risiko tinggi, disorientasi, atau nyeri hebat
 ESI_2_FLAGS = [
     "nyeri dada", "sesak napas", "lemah satu sisi", "bicara pelo",
-    "wajah mencong", "nyeri perut hebat", "hamil dengan perdarahan", "kejang sudah berhenti"
+    "wajah mencong", "nyeri perut hebat", "hamil dengan perdarahan", "kejang sudah berhenti",
+    "sakit kepala hebat", "mual parah", "kelelahan ekstrem", "halusinasi", "delusi"
 ]
 
 # Prediksi kebutuhan sumber daya (Resource) IGD untuk penentuan ESI 3-5
@@ -512,6 +513,23 @@ def triage_engine(
         red_flags.append("Hipotensi (Dewasa)")
         evidence.append(f"Tekanan darah sistolik rendah ({sbp} mmHg)")
 
+    # 2.5. Pengumpulan Faktor Risiko yang Meningkatkan Skor
+    risk_boost = 0
+    if risk_factors:
+        risks_n = [str(r).strip().lower() for r in risk_factors]
+        if "riwayat penyakit jantung" in risks_n or "riwayat stroke" in risks_n:
+            risk_boost += 1
+            evidence.append("Riwayat kardiovaskular meningkatkan risiko")
+        if "diabetes" in risks_n or "hipertensi" in risks_n:
+            risk_boost += 1
+            evidence.append("Riwayat metabolik meningkatkan risiko")
+        if "merokok" in risks_n or "obesitas" in risks_n:
+            risk_boost += 1
+            evidence.append("Faktor gaya hidup berisiko terdeteksi")
+        if pregnancy:
+            risk_boost += 1
+            evidence.append("Kehamilan meningkatkan kewaspadaan")
+
     # 3. Pengumpulan Tanda Bahaya dari Teks Keluhan & Gejala (Tanpa Negasi)
     esi_1_symptoms = check_symptom_list(symptoms, complaint, ESI_1_FLAGS)
     esi_2_symptoms = check_symptom_list(symptoms, complaint, ESI_2_FLAGS)
@@ -570,14 +588,15 @@ def triage_engine(
         
     # ESI 3, 4, 5: Berdasarkan Kebutuhan Sumber Daya (Resources)
     else:
-        if estimated_resources >= 2:
+        if estimated_resources >= 2 or risk_boost >= 2:
             level = 3
             # Cek Danger Zone Vitals untuk up-triage ESI 3 ke 2
             if (hr is not None and (hr > thresholds["hr_high"] or hr < thresholds["hr_low"])) or \
-               (rr is not None and (rr > thresholds["rr_high"] or rr < thresholds["rr_low"])):
+               (rr is not None and (rr > thresholds["rr_high"] or rr < thresholds["rr_low"])) or \
+               risk_boost >= 3:
                 level = 2
-                evidence.append(f"Pasien ESI 3 di-up-triage ke ESI 2 karena tanda vital tidak stabil (HR/RR di luar batas normal usia {age_cat})")
-        elif estimated_resources == 1:
+                evidence.append(f"Pasien ESI 3 di-up-triage ke ESI 2 karena tanda vital tidak stabil atau risiko tinggi (boost: {risk_boost})")
+        elif estimated_resources == 1 or risk_boost == 1:
             level = 4
         else:
             level = 5

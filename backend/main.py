@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.db import (
     init_db, create_patient, list_patients, get_patient, update_patient_fields,
-    update_gps, dashboard_summary, list_users, get_user, create_user, record_status_history
+    update_gps, dashboard_summary, list_users, get_user, create_user, record_status_history, delete_patient
 )
 from backend.schemas import (
     LoginRequest, CreatePatientRequest, ReviewRequest, VideoStateRequest, GPSUpdateRequest, UserCreateRequest, TokenResponse
@@ -173,6 +173,20 @@ async def update_patient(patient_id: str, payload: ReviewRequest) -> Dict[str, A
     return updated
 
 
+@app.delete("/patients/{patient_id}")
+async def delete_patient_endpoint(patient_id: str) -> Dict[str, str]:
+    existing = get_patient(patient_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Pasien tidak ditemukan.")
+    if existing.get("status") not in {"REVIEWED", "REFERRED", "ARRIVED", "CLOSED"}:
+        raise HTTPException(status_code=400, detail="Hanya pasien yang sudah ditangani (status REVIEWED/CLOSED/dll) yang bisa dihapus.")
+    deleted = delete_patient(patient_id)
+    if not deleted:
+        raise HTTPException(status_code=500, detail="Gagal menghapus pasien.")
+    await manager.broadcast({"event": "patient_deleted", "patient_id": patient_id})
+    return {"message": "Pasien berhasil dihapus."}
+
+
 @app.post("/patients/{patient_id}/video")
 async def update_patient_video(patient_id: str, payload: VideoStateRequest) -> Dict[str, Any]:
     existing = get_patient(patient_id)
@@ -199,7 +213,7 @@ async def gps_update(payload: GPSUpdateRequest) -> Dict[str, Any]:
         "lon": payload.lon,
         "accuracy": payload.accuracy,
     })
-    return updated
+    return {"success": True, "message": "GPS updated successfully"}
 
 
 @app.get("/map-data")

@@ -7,3 +7,5 @@ folium
 requests
 pillow
 python-multipart
+psycopg2-binary
+streamlit-autorefresh
