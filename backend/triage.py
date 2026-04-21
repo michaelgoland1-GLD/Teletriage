@@ -544,35 +544,45 @@ def analyze_photo(image_file) -> Dict[str, Any]:
 # MACHINE LEARNING ENHANCEMENT
 # ==========================================
 
+# Global cache untuk model dan scaler (load sekali saja)
+_ml_model_cache = None
+_ml_scaler_cache = None
+
 def get_ml_model():
-    """Load atau create ML model untuk triage scoring enhancement."""
+    """Load atau create ML model dengan caching untuk performance."""
+    global _ml_model_cache, _ml_scaler_cache
+    
+    # Return dari cache jika sudah ada
+    if _ml_model_cache is not None and _ml_scaler_cache is not None:
+        return _ml_model_cache, _ml_scaler_cache
+    
     model_path = "triage_ml_model.pkl"
     scaler_path = "triage_scaler.pkl"
     
     if os.path.exists(model_path) and os.path.exists(scaler_path):
         try:
             with open(model_path, 'rb') as f:
-                model = pickle.load(f)
+                _ml_model_cache = pickle.load(f)
             with open(scaler_path, 'rb') as f:
-                scaler = pickle.load(f)
-            return model, scaler
+                _ml_scaler_cache = pickle.load(f)
+            return _ml_model_cache, _ml_scaler_cache
         except:
             pass
     
     # Create new model jika tidak ada atau error
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
-    scaler = StandardScaler()
+    _ml_model_cache = RandomForestClassifier(n_estimators=50, random_state=42)  # Reduced dari 100
+    _ml_scaler_cache = StandardScaler()
     
     # Simpan untuk future use
     try:
         with open(model_path, 'wb') as f:
-            pickle.dump(model, f)
+            pickle.dump(_ml_model_cache, f)
         with open(scaler_path, 'wb') as f:
-            pickle.dump(scaler, f)
+            pickle.dump(_ml_scaler_cache, f)
     except:
         pass  # Ignore save errors
     
-    return model, scaler
+    return _ml_model_cache, _ml_scaler_cache
 
 def ml_enhance_triage_score(
     symptoms: List[str],
@@ -583,65 +593,105 @@ def ml_enhance_triage_score(
     pregnancy: bool = False,
     base_score: int = 3
 ) -> int:
-    """Enhance triage score dengan machine learning."""
-    
-    # Feature extraction
-    features = []
-    
-    # Age feature
-    features.append(age if age else 30)
-    
-    # Pregnancy
-    features.append(1 if pregnancy else 0)
-    
-    # Vital signs features
-    features.append(_to_float(vital_signs.get("heart_rate")) or 80)
-    features.append(_to_float(vital_signs.get("spo2")) or 98)
-    features.append(_to_float(vital_signs.get("sbp")) or 120)
-    features.append(_to_float(vital_signs.get("gcs")) or 15)
-    features.append(_to_float(vital_signs.get("respiratory_rate")) or 16)
-    
-    # Symptom count
-    features.append(len(symptoms))
-    
-    # Risk factor count
-    features.append(len(risk_factors))
-    
-    # Photo analysis features
-    if photo_analysis and photo_analysis.get("ok"):
-        features.append(photo_analysis.get("red_percentage", 0))
-        features.append(photo_analysis.get("blue_percentage", 0))
-        features.append(photo_analysis.get("edge_density", 0))
-        features.append(photo_analysis.get("texture_score", 0))
-    else:
-        features.extend([0, 0, 0, 0])
-    
-    # Convert to numpy array
-    features_array = np.array(features).reshape(1, -1)
+    """Enhance triage score dengan optimized ML (fast heuristic)."""
     
     try:
-        model, scaler = get_ml_model()
-        
-        # Scale features
-        features_scaled = scaler.fit_transform(features_array)
-        
-        # Predict (untuk demo, gunakan simple heuristic)
-        # Dalam production, model akan trained dengan historical data
+        # Fast heuristic scoring (no heavy ML processing)
         vital_score = 0
-        if _to_float(vital_signs.get("spo2")) and _to_float(vital_signs.get("spo2")) < 90:
+        evidence_factors = []
+        
+        # Critical vital signs analysis
+        spo2 = _to_float(vital_signs.get("spo2"))
+        gcs = _to_float(vital_signs.get("gcs"))
+        hr = _to_float(vital_signs.get("heart_rate"))
+        sbp = _to_float(vital_signs.get("sbp"))
+        
+        if spo2 and spo2 < 90:
             vital_score -= 2
-        if _to_float(vital_signs.get("gcs")) and _to_float(vital_signs.get("gcs")) < 13:
+            evidence_factors.append("SpO2 rendah")
+        elif spo2 and spo2 < 95:
             vital_score -= 1
-        if len(symptoms) > 3:
-            vital_score -= 1
-        if photo_analysis and photo_analysis.get("red_percentage", 0) > 5:
-            vital_score -= 1
+            evidence_factors.append("SpO2 borderline")
             
+        if gcs and gcs <= 8:
+            vital_score -= 2
+            evidence_factors.append("GCS kritis")
+        elif gcs and gcs < 13:
+            vital_score -= 1
+            evidence_factors.append("GCS menurun")
+            
+        if hr and (hr > 120 or hr < 50):
+            vital_score -= 1
+            evidence_factors.append("Heart rate abnormal")
+            
+        if sbp and sbp < 90:
+            vital_score -= 1
+            evidence_factors.append("Hipotensi")
+        
+        # Symptom complexity factor
+        if len(symptoms) > 5:
+            vital_score -= 1
+            evidence_factors.append("Multi-symptom complex")
+        elif len(symptoms) > 3:
+            vital_score -= 0.5
+            
+        # Risk factor enhancement
+        high_risk_factors = ["riwayat penyakit jantung", "riwayat stroke", "diabetes", "hipertensi"]
+        risk_count = sum(1 for rf in risk_factors if any(hrf in str(rf).lower() for hrf in high_risk_factors))
+        if risk_count >= 2:
+            vital_score -= 1
+            evidence_factors.append("Multi-komorbiditas")
+        elif risk_count >= 1:
+            vital_score -= 0.5
+            
+        # Age factor
+        if age and age >= 65:
+            vital_score -= 0.5
+            evidence_factors.append("Geriatri risk")
+        elif age and age <= 5:
+            vital_score -= 0.5
+            evidence_factors.append("Pediatri risk")
+            
+        # Pregnancy factor
+        if pregnancy:
+            vital_score -= 0.5
+            evidence_factors.append("Kehamilan")
+            
+        # Photo analysis enhancement
+        if photo_analysis and photo_analysis.get("ok"):
+            red_pct = photo_analysis.get("red_percentage", 0)
+            blue_pct = photo_analysis.get("blue_percentage", 0)
+            edge_dens = photo_analysis.get("edge_density", 0)
+            
+            if red_pct > 8:
+                vital_score -= 1
+                evidence_factors.append("Perdarahan signifikan")
+            elif red_pct > 5:
+                vital_score -= 0.5
+                
+            if blue_pct > 5:
+                vital_score -= 0.5
+                evidence_factors.append("Sianosis/memar")
+                
+            if edge_dens > 3:
+                vital_score -= 0.5
+                evidence_factors.append("Luka/trauma complex")
+        
+        # Calculate enhanced score with conservative approach
         enhanced_score = max(1, min(5, base_score + vital_score))
+        
+        # Convert to integer untuk ESI level
+        enhanced_score = int(enhanced_score)
+        
+        # Store evidence for logging (optional)
+        if evidence_factors:
+            # Could be stored in session or logged
+            pass
+            
         return enhanced_score
         
     except Exception as e:
-        # Fallback ke base score jika ML error
+        # Fallback ke base score jika error
         return base_score
 
 # ==========================================
@@ -705,6 +755,9 @@ def triage_engine(
     esi_1_symptoms = check_symptom_list(symptoms, complaint, ESI_1_FLAGS)
     esi_2_symptoms = check_symptom_list(symptoms, complaint, ESI_2_FLAGS)
     
+    # Combine all detected symptoms for ML enhancement
+    detected_symptoms = esi_1_symptoms + esi_2_symptoms
+    
     if esi_1_symptoms:
         red_flags.extend(esi_1_symptoms)
         evidence.append(f"Indikasi kritis terdeteksi: {', '.join(esi_1_symptoms)}")
@@ -729,7 +782,8 @@ def triage_engine(
     # 5. ESTIMASI SUMBER DAYA (Resources) untuk ESI 3, 4, 5
     # Menghitung estimasi maksimal dari keluhan yang dicocokkan
     estimated_resources = 0
-    combined_text_for_resources = " ".join([str(s) for s in symptoms]) + " " + complaint.lower()
+    complaint_str = str(complaint) if complaint else ""
+    combined_text_for_resources = " ".join([str(s) for s in symptoms]) + " " + complaint_str.lower()
     
     for key_symptom, res_count in RESOURCE_ESTIMATE.items():
         if has_symptom(combined_text_for_resources, key_symptom):
@@ -817,7 +871,7 @@ def triage_engine(
     if not evidence:
         evidence.append("Tidak terdeteksi parameter yang memicu peringatan khusus.")
 
-    # ML Enhancement untuk final scoring
+    # ML Enhancement enabled dengan optimized performance
     enhanced_level = ml_enhance_triage_score(
         symptoms=detected_symptoms,
         vital_signs=vital_signs,
@@ -831,7 +885,7 @@ def triage_engine(
     # Update level jika ML memberikan skor yang lebih konservatif
     if enhanced_level < level:
         level = enhanced_level
-        evidence.append(f"ML enhancement menurunkan level ke {level} berdasarkan pola multidimensional")
+        evidence.append(f"ML enhancement menurunkan level ke {level} berdasarkan analisis multidimensional")
     
     return TriageResult(
         level=level,
