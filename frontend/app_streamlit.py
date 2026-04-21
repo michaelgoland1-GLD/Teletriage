@@ -159,7 +159,6 @@ def home_page() -> None:
     st.markdown("### Fitur utama")
     st.write("• Pasien: input gejala, lokasi, foto, dan triase")
     st.write("• Admin: review, riwayat, peta pasien, dan status")
-    st.write("• Local backend: FastAPI + SQLite + realtime GPS background")
 
 
 def guide_page() -> None:
