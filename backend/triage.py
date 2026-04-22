@@ -323,9 +323,9 @@ import os
 TRIAGE_LABELS = {
     1: "ESI 1 - RESUSITASI / DARURAT SEKALI",
     2: "ESI 2 - SANGAT MENDESAK / RISIKO TINGGI",
-    3: "ESI 3 - MENDESAK SEDANG (Butuh >= 2 Sumber Daya)",
-    4: "ESI 4 - RINGAN (Butuh 1 Sumber Daya)",
-    5: "ESI 5 - SANGAT RINGAN (Tidak Butuh Sumber Daya)",
+    3: "ESI 3 - MENDESAK SEDANG (Butuh >= 2 Staf medis)",
+    4: "ESI 4 - RINGAN (Butuh 1 Staf medis)",
+    5: "ESI 5 - SANGAT RINGAN (Tidak Butuh staff medis)",
 }
 
 TRIAGE_COLORS_HINT = {1: "🔴", 2: "🟠", 3: "🟡", 4: "🟢", 5: "🔵"}

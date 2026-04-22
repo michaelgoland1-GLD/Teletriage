@@ -159,6 +159,7 @@ def home_page() -> None:
     st.markdown("### Fitur utama")
     st.write("• Pasien: input gejala, lokasi, foto, dan triase")
     st.write("• Admin: review, riwayat, peta pasien, dan status")
+    # st.write("• Local backend: FastAPI + SQLite + realtime GPS background")
 
 
 def guide_page() -> None:
@@ -206,23 +207,10 @@ def patient_page() -> None:
                 st.info("Rekomendasi pemeriksaan:")
                 for specialist in triage["specialist_recommendations"]:
                     st.markdown(f"**{specialist}**")
-        
         if triage.get("red_flags"):
             st.markdown("**Red flags:**")
             for flag in triage["red_flags"]:
                 st.error(flag)
-        
-        # Enhanced visual summary (Tahap 4 preview)
-        st.markdown("### Ringkasan Visual")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Tingkat Urgensi", triage["level"], delta=None, delta_color="normal")
-        with col2:
-            st.metric("Status", "DARURAT" if triage["level"] <= 2 else "Stabil", 
-                     delta=None, delta_color="inverse" if triage["level"] <= 2 else "normal")
-        with col3:
-            st.metric("Spesialis", len(triage.get("specialist_recommendations", [])), delta=None, delta_color="off")
-        
         # Remove raw JSON display (Tahap 4)
         # st.markdown("### Data tersimpan")
         # st.json(p)
@@ -277,7 +265,7 @@ def patient_page() -> None:
             "Riwayat penyakit jantung", "Riwayat stroke / TIA", "Diabetes", "Hipertensi",
             "Asma / PPOK", "Gangguan ginjal", "Hamil", "Usia lanjut", "Tidak ada faktor risiko yang diketahui"
         ])
-        if "Tidak ada faktor risiko yang diketahui" in risk_factors and len(risk_factors) > 1:
+        if "Tidak ada faktor risiko yang diketahui" in risk_factors:
             risk_factors = [x for x in risk_factors if x != "Tidak ada faktor risiko yang diketahui"]
         
         l1, l2, l3 = st.columns(3)
@@ -292,7 +280,7 @@ def patient_page() -> None:
         custom_input = st.text_area("Faktor risiko lain atau informasi penting (opsional)", 
                                    height=80, 
                                    placeholder="Contoh: Riwayat operasi sebelumnya, alergi obat tertentu, kondisi khusus lainnya...")
-        
+
         # Combine all risk factors
         all_risk_factors = risk_factors.copy()
         if current_medications.strip():
@@ -305,7 +293,7 @@ def patient_page() -> None:
             all_risk_factors.append("Gaya hidup tidak aktif")
         if custom_input.strip():
             all_risk_factors.append(f"Informasi tambahan: {custom_input.strip()}")
-        
+
         # Store additional data for triage processing
         additional_data = {
             "current_medications": current_medications.strip(),
