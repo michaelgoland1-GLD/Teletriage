@@ -304,7 +304,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, Field
 from typing import Any, Dict, List, Optional
 
 from PIL import Image, ImageOps, ImageStat
@@ -377,6 +377,11 @@ class TriageResult:
     red_flags: List[str]
     estimated_resources: int
     evidence: List[str]
+    specialist_recommendations: List[str] = None
+    
+    def __post_init__(self):
+        if self.specialist_recommendations is None:
+            self.specialist_recommendations = []
 
 
 # ==========================================
@@ -539,6 +544,82 @@ def analyze_photo(image_file) -> Dict[str, Any]:
     except Exception as exc:
         return {"ok": False, "error": str(exc), "quality_flags": ["Gagal membaca foto"], "visual_clues": []}
 
+
+# ==========================================
+# MEDICAL ENTITY MAPPING & SPECIALIST RECOMMENDATION
+# ==========================================
+
+# Medical entity mapping untuk deteksi spesifik
+MEDICAL_ENTITIES = {
+    "cardiac": ["nyeri dada", "jantung", "palpitasi", "sesak napas", "aritmia", "gagal jantung"],
+    "neurological": ["stroke", "pingsan", "kejang", "kelemahan", "bicara pelo", "wajah mencong", "migrain"],
+    "respiratory": ["sesak napas", "batuk", "asma", "ppok", "bronkitis", "paru-paru"],
+    "gastrointestinal": ["nyeri perut", "muntah", "diare", "maag", "tukak lambung", "usus"],
+    "orthopedic": ["patah tulang", "keseleo", "nyeri sendi", "fraktur", "trauma", "luka"],
+    "endocrine": ["diabetes", "tiroid", "hormon", "gula darah", "insulin"],
+    "renal": ["ginjal", "buang air kecil", "edema", "dialisis"],
+    "psychiatric": ["cemas", "depresi", "panik", "bingung", "stres", "kejiwaan"],
+    "infectious": ["demam", "infeksi", "bakteri", "virus", "sepsis"],
+    "allergic": ["alergi", "gatal", "ruam", "bengkak", "anafilaksis"],
+    "obstetric": ["kehamilan", "melahirkan", "kandungan", "janin", "obgyn"],
+}
+
+# Specialist mapping berdasarkan medical entities
+SPECIALIST_MAPPING = {
+    "cardiac": "Spesialis Penyakit Dalam (Kardiologi)",
+    "neurological": "Spesialis Saraf",
+    "respiratory": "Spesialis Paru",
+    "gastrointestinal": "Spesialis Penyakit Dalam (Gastroenterologi)",
+    "orthopedic": "Spesialis Bedah Ortopedi",
+    "endocrine": "Spesialis Penyakit Dalam (Endokrinologi)",
+    "renal": "Spesialis Penyakit Dalam (Nefrologi)",
+    "psychiatric": "Spesialis Kesehatan Jiwa",
+    "infectious": "Spesialis Penyakit Dalam (Infeksi)",
+    "allergic": "Spesialis Penyakit Kulit & Kelamin",
+    "obstetric": "Spesialis Kebidanan & Kandungan",
+    "general": "Spesialis Penyakit Dalam",
+    "surgery": "Spesialis Bedah Umum",
+    "pediatric": "Spesialis Anak",
+    "emergency": "Instalasi Gawat Darurat (IGD)"
+}
+
+def detect_medical_entities(symptoms: List[str], complaint: str) -> List[str]:
+    """Deteksi medical entities dari symptoms dan complaint."""
+    detected_entities = []
+    combined_text = " ".join(symptoms + [complaint]).lower()
+    
+    for entity, keywords in MEDICAL_ENTITIES.items():
+        for keyword in keywords:
+            if keyword in combined_text:
+                detected_entities.append(entity)
+                break
+    
+    return list(set(detected_entities))  # Remove duplicates
+
+def recommend_specialist(entities: List[str], triage_level: int, age: Optional[int] = None) -> List[str]:
+    """Rekomendasikan spesialis berdasarkan entities dan triage level."""
+    recommendations = []
+    
+    # Prioritas untuk emergency cases
+    if triage_level in [1, 2]:
+        recommendations.append("Instalasi Gawat Darurat (IGD)")
+    
+    # Spesialis berdasarkan entities
+    for entity in entities:
+        if entity in SPECIALIST_MAPPING:
+            specialist = SPECIALIST_MAPPING[entity]
+            if specialist not in recommendations:
+                recommendations.append(specialist)
+    
+    # Pediatric untuk anak
+    if age and age <= 12 and "Spesialis Anak" not in recommendations:
+        recommendations.append("Spesialis Anak")
+    
+    # Default untuk non-emergency tanpa spesifik entity
+    if not recommendations and triage_level >= 3:
+        recommendations.append("Spesialis Penyakit Dalam")
+    
+    return recommendations
 
 # ==========================================
 # MACHINE LEARNING ENHANCEMENT
@@ -706,6 +787,7 @@ def triage_engine(
     age: Optional[int] = None,
     complaint: str = "",
     pregnancy: bool = False,
+    additional_data: Optional[Dict[str, Any]] = None,
 ) -> TriageResult:
     
     evidence: List[str] = []
@@ -871,6 +953,49 @@ def triage_engine(
     if not evidence:
         evidence.append("Tidak terdeteksi parameter yang memicu peringatan khusus.")
 
+    # Process additional data for enhanced scoring
+    additional_score_modifier = 0
+    if additional_data:
+        # Psychological status impact
+        psych_status = additional_data.get("psychological_status", "")
+        if psych_status in ["Cemas berat", "Panik"]:
+            additional_score_modifier -= 0.5
+            evidence.append("Status psikologis berat meningkatkan risiko")
+        elif psych_status == "Bingung":
+            additional_score_modifier -= 0.3
+            evidence.append("Kebingungan meningkatkan risiko")
+        
+        # Symptom recurrence impact
+        symptom_rec = additional_data.get("symptom_recurrence", "")
+        if symptom_rec == "Gejala berulang":
+            additional_score_modifier -= 0.5
+            evidence.append("Gejala berulang menunjukkan kondisi kronis")
+        
+        # Lifestyle factors impact
+        smoking = additional_data.get("smoking_status", "")
+        if smoking == "Merokok aktif":
+            additional_score_modifier -= 0.3
+            evidence.append("Merokok aktif meningkatkan risiko kardiovaskular")
+        
+        alcohol = additional_data.get("alcohol_consumption", "")
+        if alcohol in ["Sering", "Sedang"]:
+            additional_score_modifier -= 0.2
+            evidence.append("Konsumsi alkohol meningkatkan risiko")
+        
+        # Activity level impact
+        activity = additional_data.get("activity_level", "")
+        if activity == "Tidak aktif":
+            additional_score_modifier -= 0.2
+            evidence.append("Gaya hidup tidak aktif meningkatkan risiko")
+        
+        # Current medications impact
+        meds = additional_data.get("current_medications", "")
+        if meds:
+            high_risk_meds = ["warfarin", "aspirin", "insulin", "metformin"]
+            if any(med in meds.lower() for med in high_risk_meds):
+                additional_score_modifier -= 0.3
+                evidence.append("Obat-obatan risiko tinggi terdeteksi")
+
     # ML Enhancement enabled dengan optimized performance
     enhanced_level = ml_enhance_triage_score(
         symptoms=detected_symptoms,
@@ -882,10 +1007,23 @@ def triage_engine(
         base_score=level
     )
     
-    # Update level jika ML memberikan skor yang lebih konservatif
-    if enhanced_level < level:
-        level = enhanced_level
-        evidence.append(f"ML enhancement menurunkan level ke {level} berdasarkan analisis multidimensional")
+    # Apply additional data modifier
+    final_level = enhanced_level + additional_score_modifier
+    final_level = max(1, min(5, int(final_level)))  # Ensure integer and valid range
+    
+    # Medical entity detection dan specialist recommendation
+    detected_entities = detect_medical_entities(detected_symptoms, complaint)
+    specialist_recommendations = recommend_specialist(detected_entities, level, age)
+    
+    # Add medical entity detection to evidence
+    if detected_entities:
+        entity_names = [entity.replace("_", " ").title() for entity in detected_entities]
+        evidence.append(f"Deteksi medis: {', '.join(entity_names)}")
+    
+    # Update level jika enhanced scoring lebih konservatif
+    if final_level < level:
+        level = final_level
+        evidence.append(f"Enhanced scoring menurunkan level ke {level} berdasarkan analisis multidimensional dan data tambahan")
     
     return TriageResult(
         level=level,
@@ -898,6 +1036,7 @@ def triage_engine(
         red_flags=list(set(red_flags + esi_1_symptoms)), # Gabungkan semua red flags unik
         estimated_resources=estimated_resources,
         evidence=evidence,
+        specialist_recommendations=specialist_recommendations,
     )
 
 

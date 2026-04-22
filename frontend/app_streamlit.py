@@ -195,12 +195,38 @@ def patient_page() -> None:
         st.info(triage["urgency_text"])
         st.write("**Ringkasan:**", triage["summary"])
         st.write("**Tindakan:**", triage["recommended_action"])
+        
+        # Auto-recommendation spesialis untuk status urgent
+        if triage.get("specialist_recommendations"):
+            st.markdown("### Rekomendasi Spesialis")
+            if triage["level"] in [1, 2]:
+                st.error("Status DARURAT - Segera hubungi:")
+                for specialist in triage["specialist_recommendations"]:
+                    st.markdown(f"**{specialist}**")
+            else:
+                st.info("Rekomendasi pemeriksaan:")
+                for specialist in triage["specialist_recommendations"]:
+                    st.markdown(f"**{specialist}**")
+        
         if triage.get("red_flags"):
             st.markdown("**Red flags:**")
             for flag in triage["red_flags"]:
                 st.error(flag)
-        st.markdown("### Data tersimpan")
-        st.json(p)
+        
+        # Enhanced visual summary (Tahap 4 preview)
+        st.markdown("### Ringkasan Visual")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Tingkat Urgensi", triage["level"], delta=None, delta_color="normal")
+        with col2:
+            st.metric("Status", "DARURAT" if triage["level"] <= 2 else "Stabil", 
+                     delta=None, delta_color="inverse" if triage["level"] <= 2 else "normal")
+        with col3:
+            st.metric("Spesialis", len(triage.get("specialist_recommendations", [])), delta=None, delta_color="off")
+        
+        # Remove raw JSON display (Tahap 4)
+        # st.markdown("### Data tersimpan")
+        # st.json(p)
         if p.get("video_recommended"):
             st.error("Kondisi darurat terdeteksi. Video call IGD direkomendasikan.")
             show_video_link("▶ Mulai Video Call IGD", video_call_url(p.get("video_room_id") or make_video_room_id(p["patient_id"])))
@@ -235,12 +261,62 @@ def patient_page() -> None:
         if custom_symptom.strip():
             symptoms = symptoms + [custom_symptom.strip()]
 
-        risk_factors = st.multiselect("Faktor risiko", [
+        st.markdown("### Riwayat Penyakit Dahulu (RPD)")
+        r1, r2, r3 = st.columns(3)
+        with r1:
+            current_medications = st.text_input("Obat-obatan saat ini (pisahkan dengan koma)", 
+                                             placeholder="Aspirin, Metformin, dll")
+        with r2:
+            symptom_recurrence = st.selectbox("Status gejala", 
+                                            ["Gejala pertama kali", "Gejala berulang", "Tidak tahu"])
+        with r3:
+            psychological_status = st.selectbox("Kondisi psikologis", 
+                                               ["Tenang", "Cemas ringan", "Cemas berat", "Panik", "Bingung"])
+
+        st.markdown("### Faktor Risiko & Lifestyle")
+        risk_factors = st.multiselect("Faktor risiko medis", [
             "Riwayat penyakit jantung", "Riwayat stroke / TIA", "Diabetes", "Hipertensi",
             "Asma / PPOK", "Gangguan ginjal", "Hamil", "Usia lanjut", "Tidak ada faktor risiko yang diketahui"
         ])
         if "Tidak ada faktor risiko yang diketahui" in risk_factors and len(risk_factors) > 1:
             risk_factors = [x for x in risk_factors if x != "Tidak ada faktor risiko yang diketahui"]
+        
+        l1, l2, l3 = st.columns(3)
+        with l1:
+            smoking_status = st.selectbox("Riwayat merokok", ["Tidak pernah", "Mantan perokok", "Merokok aktif"])
+        with l2:
+            alcohol_consumption = st.selectbox("Konsumsi alkohol", ["Tidak pernah", "Jarang", "Sedang", "Sering"])
+        with l3:
+            activity_level = st.selectbox("Aktivitas fisik", ["Tidak aktif", "Ringan", "Sedang", "Aktif"])
+
+        st.markdown("### Informasi Tambahan")
+        custom_input = st.text_area("Faktor risiko lain atau informasi penting (opsional)", 
+                                   height=80, 
+                                   placeholder="Contoh: Riwayat operasi sebelumnya, alergi obat tertentu, kondisi khusus lainnya...")
+        
+        # Combine all risk factors
+        all_risk_factors = risk_factors.copy()
+        if current_medications.strip():
+            all_risk_factors.append(f"Sedang menggunakan obat: {current_medications.strip()}")
+        if smoking_status != "Tidak pernah":
+            all_risk_factors.append(f"Riwayat merokok: {smoking_status}")
+        if alcohol_consumption != "Tidak pernah":
+            all_risk_factors.append(f"Konsumsi alkohol: {alcohol_consumption}")
+        if activity_level == "Tidak aktif":
+            all_risk_factors.append("Gaya hidup tidak aktif")
+        if custom_input.strip():
+            all_risk_factors.append(f"Informasi tambahan: {custom_input.strip()}")
+        
+        # Store additional data for triage processing
+        additional_data = {
+            "current_medications": current_medications.strip(),
+            "symptom_recurrence": symptom_recurrence,
+            "psychological_status": psychological_status,
+            "smoking_status": smoking_status,
+            "alcohol_consumption": alcohol_consumption,
+            "activity_level": activity_level,
+            "custom_input": custom_input.strip()
+        }
 
         st.markdown("### Pemeriksaan awal")
         mode = st.radio("Mode input", ["Awam / keluarga pasien"], horizontal=True)
@@ -293,11 +369,13 @@ def patient_page() -> None:
             "pregnancy": pregnancy,
             "chief_complaint": complaint.strip(),
             "symptoms": symptoms,
-            "risk_factors": risk_factors,
+            "risk_factors": all_risk_factors,  # Use expanded risk factors
             "vitals": vitals,
             "photo_meta": photo_meta,
             "image_path": photo_path,
             "emergency_phone": emergency_phone.strip() or DEFAULT_EMERGENCY_PHONE,
+            # Additional data for enhanced triage
+            "additional_data": additional_data
         }
         result = api_post("/patients", payload)
         st.session_state.current_patient = result
@@ -328,29 +406,107 @@ def draw_map(patients: List[Dict[str, Any]]) -> None:
 def render_patient_card(p: Dict[str, Any], context: str) -> None:
     triage = p.get("triage", {})
     unique = f"{context}_{p.get('patient_id')}_{p.get('created_at')}"
-    with st.expander(f"{triage.get('emoji', '⚪')} {p.get('patient_id')} | {p.get('name')} | {triage.get('label')}", expanded=triage.get("level", 5) in (1, 2)):
-        c1, c2, c3, c4 = st.columns(4)
-        c1.write(f"**Umur:** {p.get('age')}")
-        c2.write(f"**Jenis kelamin:** {p.get('sex')}")
-        c3.write(f"**Status:** {p.get('status')}")
-        c4.write(f"**Waktu:** {p.get('created_at')}")
-        st.write("**Keluhan utama:**", p.get("chief_complaint", "-"))
-        st.write("**Lokasi:**", p.get("location_text", "-"))
-        if p.get("gps_lat") is not None or p.get("gps_lon") is not None:
-            st.write(f"**GPS:** {p.get('gps_lat')}, {p.get('gps_lon')}")
-        st.write("**Gejala:**", ", ".join(p.get("symptoms", [])) or "-")
-        st.write("**Faktor risiko:**", ", ".join(p.get("risk_factors", [])) or "-")
-        st.write("**Hasil triage:**", triage.get("urgency_text", "-"))
-        st.write("**Tindakan:**", triage.get("recommended_action", "-"))
+    
+    # Enhanced visual card with clean layout
+    with st.expander(f"{triage.get('emoji', '')} {p.get('patient_id')} | {p.get('name')} | {triage.get('label')}", expanded=triage.get("level", 5) in (1, 2)):
+        # Patient info header
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Umur", p.get('age', '-'))
+        with col2:
+            st.metric("Jenis Kelamin", p.get('sex', '-'))
+        with col3:
+            st.metric("Status", p.get('status', '-'))
+        with col4:
+            st.metric("Waktu", p.get('created_at', '-').split(' ')[1] if p.get('created_at') else '-')
+        
+        # Triage summary card
+        st.markdown("### Ringkasan Triage")
+        t1, t2, t3, t4 = st.columns(4)
+        with t1:
+            st.metric("Level", triage.get("level", "-"), delta=None, 
+                     delta_color="inverse" if triage.get("level", 5) <= 2 else "normal")
+        with t2:
+            st.metric("Urgensi", "DARURAT" if triage.get("level", 5) <= 2 else "Stabil",
+                     delta=None, delta_color="inverse" if triage.get("level", 5) <= 2 else "normal")
+        with t3:
+            st.metric("Sumber Daya", triage.get("estimated_resources", 0))
+        with t4:
+            st.metric("Ambulans", "YA" if triage.get("ambulance_now") else "TIDAK",
+                     delta=None, delta_color="inverse" if triage.get("ambulance_now") else "normal")
+        
+        # Medical information
+        st.markdown("### Informasi Medis")
+        i1, i2 = st.columns(2)
+        with i1:
+            st.write("**Keluhan Utama:**")
+            st.info(p.get("chief_complaint", "-"))
+            st.write("**Gejala:**")
+            symptoms_text = ", ".join(p.get("symptoms", []))
+            if symptoms_text:
+                st.info(symptoms_text)
+            else:
+                st.info("-")
+        with i2:
+            st.write("**Lokasi:**")
+            st.info(p.get("location_text", "-"))
+            if p.get("gps_lat") and p.get("gps_lon"):
+                st.info(f"GPS: {p.get('gps_lat')}, {p.get('gps_lon')}")
+            st.write("**Faktor Risiko:**")
+            risk_text = ", ".join(p.get("risk_factors", [])[:3])  # Limit display
+            if risk_text:
+                st.info(risk_text)
+                if len(p.get("risk_factors", [])) > 3:
+                    st.caption(f"...dan {len(p.get('risk_factors', [])) - 3} lainnya")
+            else:
+                st.info("-")
+        
+        # Specialist recommendations
+        if triage.get("specialist_recommendations"):
+            st.markdown("### Rekomendasi Spesialis")
+            if triage.get("level", 5) <= 2:
+                st.error("Status DARURAT - Segera hubungi:")
+            else:
+                st.info("Rekomendasi pemeriksaan:")
+            for specialist in triage.get("specialist_recommendations", []):
+                st.markdown(f"**{specialist}**")
+        
+        # Actions and evidence
+        a1, a2 = st.columns(2)
+        with a1:
+            st.write("**Tindakan yang Direkomendasikan:**")
+            st.success(triage.get("recommended_action", "-"))
+        with a2:
+            st.write("**Urgency Text:**")
+            st.warning(triage.get("urgency_text", "-"))
+        
+        # Red flags (critical warnings)
         if triage.get("red_flags"):
-            st.markdown("**Red flags:**")
+            st.markdown("### Peringatan Kritis")
             for flag in triage.get("red_flags", []):
                 st.error(flag)
-        if p.get("photo_meta"):
-            st.markdown("**Analisis foto:**")
-            st.json(p["photo_meta"])
+        
+        # Photo analysis (clean display)
+        if p.get("photo_meta") and p.get("photo_meta", {}).get("ok"):
+            photo_data = p["photo_meta"]
+            st.markdown("### Analisis Foto")
+            pa1, pa2, pa3 = st.columns(3)
+            with pa1:
+                st.metric("Kualitas", "OK" if photo_data.get("ok") else "ERROR")
+            with pa2:
+                st.metric("Red %", f"{photo_data.get('red_percentage', 0):.1f}%")
+            with pa3:
+                st.metric("Blue %", f"{photo_data.get('blue_percentage', 0):.1f}%")
+            
+            if photo_data.get("visual_clues"):
+                st.write("**Analisis Visual:**")
+                for clue in photo_data.get("visual_clues", []):
+                    st.info(clue)
+        
+        # Patient photo (if available)
         if p.get("image_path") and Path(p["image_path"]).exists():
-            st.image(p["image_path"], caption="Foto pasien", use_container_width=True)
+            st.markdown("### Foto Pasien")
+            st.image(p["image_path"], caption=f"Foto: {p.get('name')}", use_container_width=True)
 
         if video_call_required(triage):
             st.markdown("**Video Call Darurat:**")

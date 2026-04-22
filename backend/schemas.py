@@ -25,6 +25,8 @@ class CreatePatientRequest(BaseModel):
     gps_accuracy: Optional[float] = None
     emergency_phone: str = ""
     tracking_token: Optional[str] = None
+    # Additional data for enhanced triage
+    additional_data: Dict[str, Any] = Field(default_factory=dict)
 
 class ReviewRequest(BaseModel):
     status: str
