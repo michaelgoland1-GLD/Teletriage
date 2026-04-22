@@ -187,11 +187,10 @@ def patient_page() -> None:
         st.success(f"Sesi aktif: {p['patient_id']} | Level {p['triage']['level']}")
         gps_tracker_component(p["patient_id"], p["tracking_token"])
         triage = p["triage"]
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3 = st.columns(3)
         c1.metric("Level", triage["level"])
         c2.metric("Label", triage["label"])
-        c3.metric("Sumber Daya", triage["estimated_resources"])
-        c4.metric("Ambulans", "YA" if triage["ambulance_now"] else "TIDAK")
+        c3.metric("Ambulans", "YA" if triage["ambulance_now"] else "TIDAK")
         st.info(triage["urgency_text"])
         st.write("**Ringkasan:**", triage["summary"])
         st.write("**Tindakan:**", triage["recommended_action"])
@@ -432,7 +431,7 @@ def render_patient_card(p: Dict[str, Any], context: str) -> None:
         
         # Triage summary card
         st.markdown("### Ringkasan Triage")
-        t1, t2, t3, t4 = st.columns(4)
+        t1, t2, t3 = st.columns(3)
         with t1:
             st.metric("Level", triage.get("level", "-"), delta=None, 
                      delta_color="inverse" if triage.get("level", 5) <= 2 else "normal")
@@ -440,8 +439,6 @@ def render_patient_card(p: Dict[str, Any], context: str) -> None:
             st.metric("Urgensi", "DARURAT" if triage.get("level", 5) <= 2 else "Stabil",
                      delta=None, delta_color="inverse" if triage.get("level", 5) <= 2 else "normal")
         with t3:
-            st.metric("Sumber Daya", triage.get("estimated_resources", 0))
-        with t4:
             st.metric("Ambulans", "YA" if triage.get("ambulance_now") else "TIDAK",
                      delta=None, delta_color="inverse" if triage.get("ambulance_now") else "normal")
         
