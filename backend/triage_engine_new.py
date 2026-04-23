@@ -14,7 +14,7 @@ from clinical_scoring import calculate_qsofa, calculate_wells, calculate_heart_s
 
 @dataclass
 class TriageResult:
-    """Production-grade triage result."""
+    """Production-grade triage result with multi-diagnosis support."""
     triage_level: str
     action: str
     syndrome: str = None
@@ -24,6 +24,9 @@ class TriageResult:
     ambulance_required: bool = False
     medication_warnings: List[str] = None
     action_plan: Dict[str, Any] = None
+    explanation: str = ""  # Explainable AI: why this triage decision was made
+    differential_diagnosis: List[str] = None  # Top 3 syndromes
+    rule_out: List[str] = None  # Syndromes to rule out
     
     def __post_init__(self):
         if self.reasons is None:
@@ -32,6 +35,10 @@ class TriageResult:
             self.medication_warnings = []
         if self.action_plan is None:
             self.action_plan = {}
+        if self.differential_diagnosis is None:
+            self.differential_diagnosis = []
+        if self.rule_out is None:
+            self.rule_out = []
 
 def emergency_guardrail(data: Dict[str, Any]) -> bool:
     """
@@ -133,8 +140,15 @@ def triage_engine(data: Dict[str, Any]) -> TriageResult:
             action_plan=generate_action_plan("Unknown Syndrome")
         )
     
-    # Step 4: Process top syndrome
+    # Step 4: Process top syndrome and multi-diagnosis
     top_syndrome = syndromes[0]
+    
+    # Multi-diagnosis: top 3 syndromes
+    top_3_syndromes = syndromes[:3]
+    differential_diagnosis = [s.name for s in top_3_syndromes]
+    
+    # Rule out: syndromes with very low confidence (< 0.3)
+    rule_out = [s.name for s in syndromes if s.score < 0.3]
     
     # Step 4.5: Apply clinical scoring decision support
     # Calculate clinical scores
@@ -237,6 +251,17 @@ def triage_engine(data: Dict[str, Any]) -> TriageResult:
     if has_high_risk_medications(medications):
         all_reasons.append("High-risk medications detected")
     
+    # Step 9: Generate explanation for triage decision
+    explanation = f"Triage level {triage_level} ditentukan berdasarkan diagnosis utama {top_syndrome.name} dengan confidence {adjusted_score:.2f}. "
+    explanation += f"Diagnosis didukung oleh: {', '.join(top_syndrome.reasons)}. "
+    if clinical_reasons:
+        explanation += f"Skor klinis memperkuat diagnosis: {', '.join(clinical_reasons)}. "
+    if len(differential_diagnosis) > 1:
+        explanation += f"Diagnosis diferensial yang dipertimbangkan: {', '.join(differential_diagnosis[1:])}. "
+    if rule_out:
+        explanation += f"Diagnosis yang dapat di-rule out: {', '.join(rule_out)}. "
+    explanation += f"Keputusan triage berdasarkan kombinasi gejala, faktor risiko, skor klinis (qSOFA/Wells/HEART), dan tanda vital."
+    
     return TriageResult(
         triage_level=triage_level,
         action=action,
@@ -246,7 +271,10 @@ def triage_engine(data: Dict[str, Any]) -> TriageResult:
         specialist=specialist,
         ambulance_required=ambulance_required,
         medication_warnings=med_warnings,
-        action_plan=action_plan
+        action_plan=action_plan,
+        explanation=explanation,
+        differential_diagnosis=differential_diagnosis,
+        rule_out=rule_out
     )
 
 def _safe_int(value: Any) -> int:

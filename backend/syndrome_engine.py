@@ -13,6 +13,7 @@ class SyndromeResult:
     name: str
     score: float
     reasons: List[str]
+    explanation: str = ""  # Explainable AI: why this diagnosis was chosen
     
     def __str__(self):
         return f"{self.name} (score: {self.score:.2f})"
@@ -70,10 +71,19 @@ def detect_syndromes(data: Dict[str, Any]) -> List[SyndromeResult]:
             acs_confidence = min(0.95, acs_confidence + 0.05)
             reasons.append("moderate HEART score")
         
+        # Generate explanation
+        explanation = f"ACS dipilih karena pasien memiliki gejala nyeri dada (count: {symptom_count}) dan faktor risiko kardiovaskular (count: {risk_count}). "
+        if heart_score >= 7:
+            explanation += f"HEART score tinggi ({heart_score}) memperkuat diagnosis ACS. "
+        elif heart_score >= 4:
+            explanation += f"HEART score sedang ({heart_score}) mendukung diagnosis ACS. "
+        explanation += f"Confidence {acs_confidence:.2f} berdasarkan kombinasi gejala, risiko, dan skor klinis."
+        
         syndromes.append(SyndromeResult(
             "ACS", 
             min(0.98, acs_confidence),  # Cap at 0.98
-            reasons
+            reasons,
+            explanation
         ))
     
     # --- SEPSIS (qSOFA-based) ---
@@ -133,17 +143,27 @@ def detect_syndromes(data: Dict[str, Any]) -> List[SyndromeResult]:
             sepsis_confidence = min(0.98, sepsis_confidence + 0.05)
             sepsis_reasons.append("high qSOFA score")
         
+        # Generate explanation
+        explanation = f"Sepsis dipilih karena qSOFA score {sepsis_qsofa_score} (>=2) dengan sumber infeksi terdeteksi. "
+        if qsofa_score >= 2:
+            explanation += f"qSOFA klinis tinggi ({qsofa_score}) memperkuat diagnosis sepsis. "
+        explanation += f"Confidence {sepsis_confidence:.2f} berdasarkan kriteria qSOFA dan sumber infeksi."
+        
         syndromes.append(SyndromeResult(
             "Sepsis", 
             sepsis_confidence, 
-            sepsis_reasons
+            sepsis_reasons,
+            explanation
         ))
     elif sepsis_qsofa_score >= 1 and infection_source:
         # Possible sepsis - lower confidence
+        explanation = f"Possible Sepsis dipertimbangkan karena qSOFA score {sepsis_qsofa_score} dengan sumber infeksi. Confidence 0.65 (sedang)."
+        
         syndromes.append(SyndromeResult(
             "Possible Sepsis", 
             0.65, 
-            sepsis_reasons
+            sepsis_reasons,
+            explanation
         ))
     
     # --- PULMONARY EMBOLISM (PE) - Dynamic Scoring ---
@@ -184,10 +204,19 @@ def detect_syndromes(data: Dict[str, Any]) -> List[SyndromeResult]:
             pe_confidence = min(0.90, pe_confidence + 0.05)
             reasons.append("moderate Wells score")
         
+        # Generate explanation
+        explanation = f"Pulmonary Embolism dipilih karena gejala sesak napas mendadak (count: {symptom_count}) dan faktor risiko PE (count: {risk_count}). "
+        if wells_score >= 4:
+            explanation += f"Wells score tinggi ({wells_score}) memperkuat diagnosis PE. "
+        elif wells_score >= 2:
+            explanation += f"Wells score sedang ({wells_score}) mendukung diagnosis PE. "
+        explanation += f"Confidence {pe_confidence:.2f} berdasarkan kombinasi gejala, risiko, dan skor Wells."
+        
         syndromes.append(SyndromeResult(
             "Pulmonary Embolism", 
             min(0.95, pe_confidence),
-            reasons
+            reasons,
+            explanation
         ))
     
     # --- ECTOPIC PREGNANCY - Dynamic Scoring ---
@@ -220,10 +249,17 @@ def detect_syndromes(data: Dict[str, Any]) -> List[SyndromeResult]:
             if "pingsan" in symptoms or "syok" in symptoms:
                 ectopic_confidence += 0.15
             
+            # Generate explanation
+            explanation = f"Ectopic Pregnancy dipilih karena nyeri perut bawah (count: {symptom_count}) dan status kehamilan. "
+            if "pingsan" in symptoms or "syok" in symptoms:
+                explanation += "Gejala kritis (pingsan/syok) meningkatkan kecurigaan. "
+            explanation += f"Confidence {ectopic_confidence:.2f} berdasarkan gejala obstetri dan risiko."
+            
             syndromes.append(SyndromeResult(
                 "Ectopic Pregnancy", 
                 min(0.95, ectopic_confidence),
-                reasons
+                reasons,
+                explanation
             ))
     
     # --- DIABETIC KETOACIDOSIS (DKA) - Dynamic Scoring ---
@@ -257,10 +293,17 @@ def detect_syndromes(data: Dict[str, Any]) -> List[SyndromeResult]:
         if any(med in medications for med in dka_medications):
             dka_confidence += 0.05
         
+        # Generate explanation
+        explanation = f"DKA dipilih karena gejala metabolik (count: {symptom_count}) dan riwayat diabetes. "
+        if "bau aseton napas" in symptoms:
+            explanation += "Bau aseton napas (tanda klasik DKA) terdeteksi. "
+        explanation += f"Confidence {dka_confidence:.2f} berdasarkan gejala DKA dan riwayat diabetes."
+        
         syndromes.append(SyndromeResult(
             "DKA", 
             min(0.90, dka_confidence),
-            reasons
+            reasons,
+            explanation
         ))
     
     # --- STROKE - Dynamic Scoring ---
@@ -292,10 +335,17 @@ def detect_syndromes(data: Dict[str, Any]) -> List[SyndromeResult]:
         if any(sym in symptoms for sym in ["wajah mencong", "bicara pelo", "sulit bicara"]):
             stroke_confidence += 0.10
         
+        # Generate explanation
+        explanation = f"Stroke dipilih karena gejala neurologis fokal (count: {symptom_count}) dan faktor risiko vaskular (count: {risk_count}). "
+        if any(sym in symptoms for sym in ["wajah mencong", "bicara pelo", "sulit bicara"]):
+            explanation += "Gejala FAST positif terdeteksi. "
+        explanation += f"Confidence {stroke_confidence:.2f} berdasarkan gejala stroke dan risiko vaskular."
+        
         syndromes.append(SyndromeResult(
             "Stroke", 
             min(0.90, stroke_confidence),
-            reasons
+            reasons,
+            explanation
         ))
     
     # --- APPENDICITIS (Pattern-Based) ---
@@ -332,10 +382,19 @@ def detect_syndromes(data: Dict[str, Any]) -> List[SyndromeResult]:
         appendicitis_reasons.append("peritoneal signs")
     
     if appendicitis_score >= 0.5:
+        # Generate explanation
+        explanation = f"Appendicitis dipilih karena pola nyeri perut kanan bawah (score: {appendicitis_score:.2f}). "
+        if "nyeri perut sekitar pusar lalu pindah kanan bawah" in " ".join(symptoms):
+            explanation += "Migrasi nyeri dari pusar ke kanan bawah terdeteksi (tanda klasik). "
+        if systemic_count >= 2:
+            explanation += f"Gejala sistemik ({systemic_count} tanda) mendukung diagnosis. "
+        explanation += f"Confidence {min(0.85, appendicitis_score):.2f} berdasarkan pola klinis appendicitis."
+        
         syndromes.append(SyndromeResult(
             "Appendicitis", 
             min(0.85, appendicitis_score),  # Cap at 0.85
-            appendicitis_reasons
+            appendicitis_reasons,
+            explanation
         ))
     
     # --- CHOLECYSTITIS (Pattern-Based) ---
@@ -366,10 +425,19 @@ def detect_syndromes(data: Dict[str, Any]) -> List[SyndromeResult]:
         cholecystitis_reasons.append("systemic symptoms")
     
     if cholecystitis_score >= 0.5:
+        # Generate explanation
+        explanation = f"Cholecystitis dipilih karena nyeri perut kanan atas (score: {cholecystitis_score:.2f}). "
+        if any(sym in symptoms for sym in ["nyeri perut setelah makan berlemak", "nyeri perut setelah makan"]):
+            explanation += "Nyeri postprandial terdeteksi (tanda klasik). "
+        if any(sym in symptoms for sym in ["kuning", "kulit kuning", "mata kuning"]):
+            explanation += "Jaundice terdeteksi (tanda komplikasi). "
+        explanation += f"Confidence {min(0.80, cholecystitis_score):.2f} berdasarkan pola klinis cholecystitis."
+        
         syndromes.append(SyndromeResult(
             "Cholecystitis", 
             min(0.80, cholecystitis_score),
-            cholecystitis_reasons
+            cholecystitis_reasons,
+            explanation
         ))
     
     # --- PERFORATED ULCER (Pattern-Based) ---
@@ -390,10 +458,19 @@ def detect_syndromes(data: Dict[str, Any]) -> List[SyndromeResult]:
             ulcer_score += 0.1
             ulcer_reasons.append("ulcer history")
         
+        # Generate explanation
+        explanation = f"Perforated Ulcer dipilih karena nyeri perut mendadak hebat (score: {ulcer_score:.2f}). "
+        if any(sym in symptoms for sym in ["perut kaku", "perut papan"]):
+            explanation += "Rigidity abdominal terdeteksi (tanda perforasi). "
+        if any(sym in symptoms for sym in ["riwayat maag", "riwayat tukak lambung"]):
+            explanation += "Riwayat ulcer terdeteksi. "
+        explanation += f"Confidence {min(0.95, ulcer_score):.2f} berdasarkan tanda perforasi viscus."
+        
         syndromes.append(SyndromeResult(
             "Perforated Ulcer", 
             min(0.95, ulcer_score),
-            ulcer_reasons
+            ulcer_reasons,
+            explanation
         ))
     
     # Return sorted by confidence score (highest first)
