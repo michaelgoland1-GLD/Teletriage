@@ -449,6 +449,7 @@ class TriageResult:
     level: int
     label: str
     emoji: str
+    score: int
     urgency_text: str
     summary: str
     recommended_action: str
@@ -1056,6 +1057,8 @@ def triage_engine(
     if not evidence:
         evidence.append("Tidak terdeteksi parameter yang memicu peringatan khusus.")
 
+    score = max(1, 6 - level)
+
     # Process additional data for enhanced scoring
     additional_score_modifier = 0
     if additional_data:
@@ -1132,6 +1135,7 @@ def triage_engine(
         level=level,
         label=TRIAGE_LABELS[level],
         emoji=TRIAGE_COLORS_HINT[level],
+        score=score,
         urgency_text=urgency_text,
         summary=summary,
         recommended_action=" ".join(action_lines),
