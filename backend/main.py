@@ -109,6 +109,7 @@ async def create_patient_endpoint(payload: CreatePatientRequest) -> Dict[str, An
         age=payload.age,
         complaint=payload.chief_complaint,
         pregnancy=payload.pregnancy,
+        additional_data=payload.additional_data,
     )
     video_recommended = triage.level in (1, 2) or triage.ambulance_now
     record = {

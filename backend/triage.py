@@ -304,10 +304,17 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, Field
 from typing import Any, Dict, List, Optional
 
 from PIL import Image, ImageOps, ImageStat
+from fuzzywuzzy import fuzz, process
+import cv2
+import numpy as np
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import StandardScaler
+import pickle
+import os
 
 # ==========================================
 # KONFIGURASI MEDIS & ESI (MUDAH DIUBAH)
@@ -316,9 +323,9 @@ from PIL import Image, ImageOps, ImageStat
 TRIAGE_LABELS = {
     1: "ESI 1 - RESUSITASI / DARURAT SEKALI",
     2: "ESI 2 - SANGAT MENDESAK / RISIKO TINGGI",
-    3: "ESI 3 - MENDESAK SEDANG (Butuh >= 2 Sumber Daya)",
-    4: "ESI 4 - RINGAN (Butuh 1 Sumber Daya)",
-    5: "ESI 5 - SANGAT RINGAN (Tidak Butuh Sumber Daya)",
+    3: "ESI 3 - MENDESAK SEDANG (Butuh >= 2 Staf medis)",
+    4: "ESI 4 - RINGAN (Butuh 1 Staf medis)",
+    5: "ESI 5 - SANGAT RINGAN (Tidak Butuh staff medis)",
 }
 
 TRIAGE_COLORS_HINT = {1: "🔴", 2: "🟠", 3: "🟡", 4: "🟢", 5: "🔵"}
@@ -347,11 +354,90 @@ ESI_2_FLAGS = [
     "sakit kepala hebat", "mual parah", "kelelahan ekstrem", "halusinasi", "delusi"
 ]
 
-# Prediksi kebutuhan sumber daya (Resource) IGD untuk penentuan ESI 3-5
+# Prediksi kebutuhan tenaga medis spesifik untuk IGD
+MEDICAL_STAFF_ESTIMATE = {
+    "nyeri dada": {
+        "dokter_umum": 1,
+        "dokter_spesialis": 1,  # Cardiology
+        "perawat": 2,
+        "total": 4
+    },
+    "nyeri perut": {
+        "dokter_umum": 1,
+        "dokter_spesialis": 1,  # Internal Medicine/Surgery
+        "perawat": 1,
+        "total": 3
+    },
+    "trauma": {
+        "dokter_umum": 1,
+        "dokter_spesialis": 1,  # Surgery/Orthopedic
+        "perawat": 2,
+        "total": 4
+    },
+    "sesak napas": {
+        "dokter_umum": 1,
+        "dokter_spesialis": 1,  # Pulmonology/Internal
+        "perawat": 1,
+        "total": 3
+    },
+    "patah tulang": {
+        "dokter_umum": 1,
+        "dokter_spesialis": 1,  # Orthopedic
+        "perawat": 1,
+        "total": 3
+    },
+    "keseleo": {
+        "dokter_umum": 1,
+        "perawat": 1,
+        "total": 2
+    },
+    "luka robek": {
+        "dokter_umum": 1,
+        "perawat": 1,
+        "total": 2
+    },
+    "luka bakar kecil": {
+        "dokter_umum": 1,
+        "perawat": 1,
+        "total": 2
+    },
+    "demam": {
+        "dokter_umum": 1,
+        "dokter_spesialis": 0,
+        "perawat": 1,
+        "total": 2
+    },
+    "batuk pilek": {
+        "dokter_umum": 1,
+        "dokter_spesialis": 0,
+        "perawat": 1,
+        "total": 2
+    },
+    "sakit tenggorokan": {
+        "dokter_umum": 1,
+        "dokter_spesialis": 0,
+        "perawat": 1,
+        "total": 2
+    },
+    "gatal": {
+        "dokter_umum": 1,
+        "dokter_spesialis": 0,
+        "perawat": 1,
+        "total": 2
+    },
+    "muntah berulang": {
+        "dokter_umum": 1,
+        "dokter_spesialis": 1,  # Internal Medicine
+        "perawat": 1,
+        "total": 3
+    }
+}
+
+# Legacy compatibility - tetap available untuk backward compatibility
 RESOURCE_ESTIMATE = {
-    "nyeri dada": 3, "nyeri perut": 2, "trauma": 2, "sesak napas": 2, "muntah berulang": 2,
-    "patah tulang": 2, "keseleo": 1, "luka robek": 1, "luka bakar kecil": 1,
-    "demam": 0, "batuk pilek": 0, "sakit tenggorokan": 0, "gatal": 0
+    "nyeri dada": 4, "nyeri perut": 3, "trauma": 4, "sesak napas": 3, "muntah berulang": 3,
+    "patah tulang": 3, "keseleo": 2, "luka robek": 2, "luka bakar kecil": 2,
+    "demam": 2, "batuk pilek": 2, "sakit tenggorokan": 2, "gatal": 2
 }
 
 # ==========================================
@@ -371,6 +457,14 @@ class TriageResult:
     red_flags: List[str]
     estimated_resources: int
     evidence: List[str]
+    specialist_recommendations: List[str] = None
+    medical_staff_breakdown: Dict[str, int] = None
+    
+    def __post_init__(self):
+        if self.specialist_recommendations is None:
+            self.specialist_recommendations = []
+        if self.medical_staff_breakdown is None:
+            self.medical_staff_breakdown = {"dokter_umum": 0, "dokter_spesialis": 0, "perawat": 0, "total": 0}
 
 
 # ==========================================
@@ -407,12 +501,25 @@ def has_symptom(text: str, symptom: str) -> bool:
     return False
 
 def check_symptom_list(symptoms_raw: List[str], complaint: str, target_list: List[str]) -> List[str]:
-    """Mengembalikan daftar gejala yang terdeteksi valid (tanpa negasi)."""
+    """Mengembalikan daftar gejala yang terdeteksi valid (tanpa negasi) dengan fuzzy matching."""
     combined_text = " ".join([str(s) for s in symptoms_raw]) + " " + str(complaint)
     found = []
+    
+    # Exact matching dulu
     for symptom in target_list:
         if has_symptom(combined_text, symptom):
             found.append(symptom)
+    
+    # Fuzzy matching untuk gejala yang tidak terdeteksi exact match
+    remaining_symptoms = [s for s in target_list if s not in found]
+    if remaining_symptoms:
+        # Gunakan fuzzywuzzy untuk mencari kemiripan
+        fuzzy_matches = process.extract(combined_text, remaining_symptoms, limit=5, scorer=fuzz.partial_ratio)
+        for match, score in fuzzy_matches:
+            if score >= 70:  # Threshold 70% similarity
+                if not has_symptom(combined_text, match):  # Double check no negation
+                    found.append(match)
+    
     return found
 
 
@@ -420,19 +527,30 @@ def check_symptom_list(symptoms_raw: List[str], complaint: str, target_list: Lis
 # MODUL ANALISIS GAMBAR
 # ==========================================
 
-def analyze_photo(image_file) -> Dict[str, Any]:
+def analyze_photo(image_file) -> Optional[Dict[str, Any]]:
+    """
+    Analyze photo for clinical clues.
+    Returns None on failure (safe wrapper - no crash).
+    Image processing is optional - text triage works fully without image.
+    """
     try:
         img = Image.open(image_file).convert("RGB")
         img = ImageOps.exif_transpose(img)
         width, height = img.size
         
-        # Crop area tengah gambar (50%) untuk meminimalkan false positive dari background
-        left = width * 0.25
-        top = height * 0.25
-        right = width * 0.75
-        bottom = height * 0.75
-        center_img = img.crop((left, top, right, bottom))
+        # Convert PIL ke OpenCV format
+        img_array = np.array(img)
+        img_cv = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
         
+        # Crop area tengah gambar (50%) untuk meminimalkan false positive dari background
+        left = int(width * 0.25)
+        top = int(height * 0.25)
+        right = int(width * 0.75)
+        bottom = int(height * 0.75)
+        center_img = img.crop((left, top, right, bottom))
+        center_cv = img_cv[top:bottom, left:right]
+        
+        # Basic PIL analysis (backward compatibility)
         stat = ImageStat.Stat(center_img)
         r_mean, g_mean, b_mean = stat.mean
         
@@ -444,6 +562,38 @@ def analyze_photo(image_file) -> Dict[str, Any]:
         red_dominance = max(0.0, r_mean - ((g_mean + b_mean) / 2.0))
         blue_dominance = max(0.0, b_mean - ((r_mean + g_mean) / 2.0))
         
+        # Advanced OpenCV analysis
+        gray_cv = cv2.cvtColor(center_cv, cv2.COLOR_BGR2GRAY)
+        
+        # Edge detection untuk wound/boundary detection
+        edges = cv2.Canny(gray_cv, 50, 150)
+        edge_density = np.sum(edges > 0) / (edges.shape[0] * edges.shape[1]) * 100
+        
+        # Color analysis dengan OpenCV (HSV untuk better color detection)
+        hsv = cv2.cvtColor(center_cv, cv2.COLOR_BGR2HSV)
+        
+        # Red color detection (bleeding/inflammation)
+        lower_red1 = np.array([0, 50, 50])
+        upper_red1 = np.array([10, 255, 255])
+        lower_red2 = np.array([170, 50, 50])
+        upper_red2 = np.array([180, 255, 255])
+        red_mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
+        red_mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
+        red_mask = red_mask1 + red_mask2
+        red_percentage = np.sum(red_mask > 0) / (red_mask.shape[0] * red_mask.shape[1]) * 100
+        
+        # Blue/purple detection (bruises/cyanosis)
+        lower_blue = np.array([100, 50, 50])
+        upper_blue = np.array([130, 255, 255])
+        blue_mask = cv2.inRange(hsv, lower_blue, upper_blue)
+        blue_percentage = np.sum(blue_mask > 0) / (blue_mask.shape[0] * blue_mask.shape[1]) * 100
+        
+        # Texture analysis untuk wound detection
+        kernel = np.ones((3,3), np.uint8)
+        gradient = cv2.morphologyEx(gray_cv, cv2.MORPH_GRADIENT, kernel)
+        texture_score = np.sum(gradient) / (gradient.shape[0] * gradient.shape[1])
+        
+        # Quality assessment
         quality_flags = []
         if min(width, height) < 300:
             quality_flags.append("Resolusi gambar rendah")
@@ -452,11 +602,16 @@ def analyze_photo(image_file) -> Dict[str, Any]:
         if contrast < 15:
             quality_flags.append("Kontras gambar rendah")
             
+        # Enhanced visual clues dengan OpenCV
         visual_clues = []
-        if red_dominance > 25:
-            visual_clues.append("Warna merah dominan di area fokus (indikasi perdarahan/kemerahan)")
-        if blue_dominance > 15:
-            visual_clues.append("Warna kebiruan dominan di area fokus (indikasi sianosis/memar)")
+        if red_percentage > 5:
+            visual_clues.append(f"Area merah signifikan terdeteksi ({red_percentage:.1f}% - indikasi perdarahan/inflamasi)")
+        if blue_percentage > 3:
+            visual_clues.append(f"Area kebiruan terdeteksi ({blue_percentage:.1f}% - indikasi memar/sianosis)")
+        if edge_density > 2:
+            visual_clues.append(f"Tekstur kompleks terdeteksi (edge density {edge_density:.1f}% - indikasi luka/irregularitas)")
+        if texture_score > 15:
+            visual_clues.append("Tekstur permukaan tidak rata terdeteksi (indikasi luka atau kondisi kulit abnormal)")
             
         return {
             "ok": True,
@@ -468,10 +623,247 @@ def analyze_photo(image_file) -> Dict[str, Any]:
             "visual_clues": visual_clues,
             "red_dominance": round(red_dominance, 2),
             "blue_dominance": round(blue_dominance, 2),
+            # Enhanced OpenCV metrics
+            "red_percentage": round(red_percentage, 2),
+            "blue_percentage": round(blue_percentage, 2),
+            "edge_density": round(edge_density, 2),
+            "texture_score": round(texture_score, 2),
         }
     except Exception as exc:
-        return {"ok": False, "error": str(exc), "quality_flags": ["Gagal membaca foto"], "visual_clues": []}
+        # Return None on failure - safe wrapper, no crash
+        return None
 
+
+# ==========================================
+# MEDICAL ENTITY MAPPING & SPECIALIST RECOMMENDATION
+# ==========================================
+
+# Medical entity mapping untuk deteksi spesifik
+MEDICAL_ENTITIES = {
+    "cardiac": ["nyeri dada", "jantung", "palpitasi", "sesak napas", "aritmia", "gagal jantung"],
+    "neurological": ["stroke", "pingsan", "kejang", "kelemahan", "bicara pelo", "wajah mencong", "migrain"],
+    "respiratory": ["sesak napas", "batuk", "asma", "ppok", "bronkitis", "paru-paru"],
+    "gastrointestinal": ["nyeri perut", "muntah", "diare", "maag", "tukak lambung", "usus"],
+    "orthopedic": ["patah tulang", "keseleo", "nyeri sendi", "fraktur", "trauma", "luka"],
+    "endocrine": ["diabetes", "tiroid", "hormon", "gula darah", "insulin"],
+    "renal": ["ginjal", "buang air kecil", "edema", "dialisis"],
+    "psychiatric": ["cemas", "depresi", "panik", "bingung", "stres", "kejiwaan"],
+    "infectious": ["demam", "infeksi", "bakteri", "virus", "sepsis"],
+    "allergic": ["alergi", "gatal", "ruam", "bengkak", "anafilaksis"],
+    "obstetric": ["kehamilan", "melahirkan", "kandungan", "janin", "obgyn"],
+}
+
+# Specialist mapping berdasarkan medical entities
+SPECIALIST_MAPPING = {
+    "cardiac": "Spesialis Penyakit Dalam (Kardiologi)",
+    "neurological": "Spesialis Saraf",
+    "respiratory": "Spesialis Paru",
+    "gastrointestinal": "Spesialis Penyakit Dalam (Gastroenterologi)",
+    "orthopedic": "Spesialis Bedah Ortopedi",
+    "endocrine": "Spesialis Penyakit Dalam (Endokrinologi)",
+    "renal": "Spesialis Penyakit Dalam (Nefrologi)",
+    "psychiatric": "Spesialis Kesehatan Jiwa",
+    "infectious": "Spesialis Penyakit Dalam (Infeksi)",
+    "allergic": "Spesialis Penyakit Kulit & Kelamin",
+    "obstetric": "Spesialis Kebidanan & Kandungan",
+    "general": "Spesialis Penyakit Dalam",
+    "surgery": "Spesialis Bedah Umum",
+    "pediatric": "Spesialis Anak",
+    "emergency": "Instalasi Gawat Darurat (IGD)"
+}
+
+def detect_medical_entities(symptoms: List[str], complaint: str) -> List[str]:
+    """Deteksi medical entities dari symptoms dan complaint."""
+    detected_entities = []
+    combined_text = " ".join(symptoms + [complaint]).lower()
+    
+    for entity, keywords in MEDICAL_ENTITIES.items():
+        for keyword in keywords:
+            if keyword in combined_text:
+                detected_entities.append(entity)
+                break
+    
+    return list(set(detected_entities))  # Remove duplicates
+
+def recommend_specialist(entities: List[str], triage_level: int, age: Optional[int] = None) -> List[str]:
+    """Rekomendasikan spesialis berdasarkan entities dan triage level."""
+    recommendations = []
+    
+    # Prioritas untuk emergency cases
+    if triage_level in [1, 2]:
+        recommendations.append("Instalasi Gawat Darurat (IGD)")
+    
+    # Spesialis berdasarkan entities
+    for entity in entities:
+        if entity in SPECIALIST_MAPPING:
+            specialist = SPECIALIST_MAPPING[entity]
+            if specialist not in recommendations:
+                recommendations.append(specialist)
+    
+    # Pediatric untuk anak
+    if age and age <= 12 and "Spesialis Anak" not in recommendations:
+        recommendations.append("Spesialis Anak")
+    
+    # Default untuk non-emergency tanpa spesifik entity
+    if not recommendations and triage_level >= 3:
+        recommendations.append("Spesialis Penyakit Dalam")
+    
+    return recommendations
+
+# ==========================================
+# MACHINE LEARNING ENHANCEMENT
+# ==========================================
+
+# Global cache untuk model dan scaler (load sekali saja)
+_ml_model_cache = None
+_ml_scaler_cache = None
+
+def get_ml_model():
+    """Load atau create ML model dengan caching untuk performance."""
+    global _ml_model_cache, _ml_scaler_cache
+    
+    # Return dari cache jika sudah ada
+    if _ml_model_cache is not None and _ml_scaler_cache is not None:
+        return _ml_model_cache, _ml_scaler_cache
+    
+    model_path = "triage_ml_model.pkl"
+    scaler_path = "triage_scaler.pkl"
+    
+    if os.path.exists(model_path) and os.path.exists(scaler_path):
+        try:
+            with open(model_path, 'rb') as f:
+                _ml_model_cache = pickle.load(f)
+            with open(scaler_path, 'rb') as f:
+                _ml_scaler_cache = pickle.load(f)
+            return _ml_model_cache, _ml_scaler_cache
+        except:
+            pass
+    
+    # Create new model jika tidak ada atau error
+    _ml_model_cache = RandomForestClassifier(n_estimators=50, random_state=42)  # Reduced dari 100
+    _ml_scaler_cache = StandardScaler()
+    
+    # Simpan untuk future use
+    try:
+        with open(model_path, 'wb') as f:
+            pickle.dump(_ml_model_cache, f)
+        with open(scaler_path, 'wb') as f:
+            pickle.dump(_ml_scaler_cache, f)
+    except:
+        pass  # Ignore save errors
+    
+    return _ml_model_cache, _ml_scaler_cache
+
+def ml_enhance_triage_score(
+    symptoms: List[str],
+    vital_signs: Dict[str, Any],
+    risk_factors: List[str],
+    photo_analysis: Optional[Dict[str, Any]] = None,
+    age: Optional[int] = None,
+    pregnancy: bool = False,
+    base_score: int = 3
+) -> int:
+    """Enhance triage score dengan optimized ML (fast heuristic)."""
+    
+    try:
+        # Fast heuristic scoring (no heavy ML processing)
+        vital_score = 0
+        evidence_factors = []
+        
+        # Critical vital signs analysis
+        spo2 = _to_float(vital_signs.get("spo2"))
+        gcs = _to_float(vital_signs.get("gcs"))
+        hr = _to_float(vital_signs.get("heart_rate"))
+        sbp = _to_float(vital_signs.get("sbp"))
+        
+        if spo2 and spo2 < 90:
+            vital_score -= 2
+            evidence_factors.append("SpO2 rendah")
+        elif spo2 and spo2 < 95:
+            vital_score -= 1
+            evidence_factors.append("SpO2 borderline")
+            
+        if gcs and gcs <= 8:
+            vital_score -= 2
+            evidence_factors.append("GCS kritis")
+        elif gcs and gcs < 13:
+            vital_score -= 1
+            evidence_factors.append("GCS menurun")
+            
+        if hr and (hr > 120 or hr < 50):
+            vital_score -= 1
+            evidence_factors.append("Heart rate abnormal")
+            
+        if sbp and sbp < 90:
+            vital_score -= 1
+            evidence_factors.append("Hipotensi")
+        
+        # Symptom complexity factor
+        if len(symptoms) > 5:
+            vital_score -= 1
+            evidence_factors.append("Multi-symptom complex")
+        elif len(symptoms) > 3:
+            vital_score -= 0.5
+            
+        # Risk factor enhancement
+        high_risk_factors = ["riwayat penyakit jantung", "riwayat stroke", "diabetes", "hipertensi"]
+        risk_count = sum(1 for rf in risk_factors if any(hrf in str(rf).lower() for hrf in high_risk_factors))
+        if risk_count >= 2:
+            vital_score -= 1
+            evidence_factors.append("Multi-komorbiditas")
+        elif risk_count >= 1:
+            vital_score -= 0.5
+            
+        # Age factor
+        if age and age >= 65:
+            vital_score -= 0.5
+            evidence_factors.append("Geriatri risk")
+        elif age and age <= 5:
+            vital_score -= 0.5
+            evidence_factors.append("Pediatri risk")
+            
+        # Pregnancy factor
+        if pregnancy:
+            vital_score -= 0.5
+            evidence_factors.append("Kehamilan")
+            
+        # Photo analysis enhancement (OPTIONAL - does not override text triage)
+        # Image processing is optional - returns None on failure, text triage works fully without image
+        # Image results are evidence ONLY - NO impact on score to prevent overriding text triage
+        if photo_analysis and photo_analysis.get("ok"):
+            red_pct = photo_analysis.get("red_percentage", 0)
+            blue_pct = photo_analysis.get("blue_percentage", 0)
+            edge_dens = photo_analysis.get("edge_density", 0)
+            
+            # Image results as supplementary evidence ONLY - NO SCORE IMPACT
+            # Image cannot override main triage decisions
+            if red_pct > 8:
+                evidence_factors.append("Perdarahan signifikan pada foto (suplemen)")
+            if red_pct > 5:
+                evidence_factors.append("Perdarahan pada foto (suplemen)")
+                
+            if blue_pct > 5:
+                evidence_factors.append("Sianosis/memar pada foto (suplemen)")
+                
+            if edge_dens > 3:
+                evidence_factors.append("Luka/trauma complex pada foto (suplemen)")
+        
+        # Calculate enhanced score with conservative approach
+        enhanced_score = max(1, min(5, base_score + vital_score))
+        
+        # Convert to integer untuk ESI level
+        enhanced_score = int(enhanced_score)
+        
+        # Store evidence for logging (optional)
+        if evidence_factors:
+            # Could be stored in session or logged
+            pass
+            
+        return enhanced_score
+        
+    except Exception as e:
+        # Fallback ke base score jika error
+        return base_score
 
 # ==========================================
 # ENGINE TELETRIAGE ESI (EMERGENCY SEVERITY INDEX)
@@ -485,6 +877,7 @@ def triage_engine(
     age: Optional[int] = None,
     complaint: str = "",
     pregnancy: bool = False,
+    additional_data: Optional[Dict[str, Any]] = None,
 ) -> TriageResult:
     
     evidence: List[str] = []
@@ -534,6 +927,9 @@ def triage_engine(
     esi_1_symptoms = check_symptom_list(symptoms, complaint, ESI_1_FLAGS)
     esi_2_symptoms = check_symptom_list(symptoms, complaint, ESI_2_FLAGS)
     
+    # Combine all detected symptoms for ML enhancement
+    detected_symptoms = esi_1_symptoms + esi_2_symptoms
+    
     if esi_1_symptoms:
         red_flags.extend(esi_1_symptoms)
         evidence.append(f"Indikasi kritis terdeteksi: {', '.join(esi_1_symptoms)}")
@@ -545,30 +941,45 @@ def triage_engine(
         evidence.append("Kehamilan dengan penyulit terdeteksi")
         esi_2_symptoms.append("Kehamilan berisiko")
 
-    # 4. Integrasi Bukti Visual dari Foto
+    # 4. Integrasi Bukti Visual dari Foto (OPTIONAL - does not override text triage)
+    # Image processing is optional - text triage works fully without image
+    # Image results are used as supplementary evidence only, not to override main triage decisions
     if photo_analysis and photo_analysis.get("ok"):
         if photo_analysis.get("visual_clues"):
             evidence.extend([f"Foto: {x}" for x in photo_analysis["visual_clues"]])
-            # Up-triage logic based on visual
+            # Visual clues as SUPPLEMENTARY evidence only - does not override text-based triage
+            # Image cannot override main triage results
             if photo_analysis.get("blue_dominance", 0) > 15:
-                esi_2_symptoms.append("Sianosis (Visual)")
+                evidence.append("Indikasi sianosis pada foto (suplemen)")
             if photo_analysis.get("red_dominance", 0) > 25 and check_symptom_list(symptoms, complaint, ["trauma", "kecelakaan", "luka"]):
-                esi_2_symptoms.append("Perdarahan aktif dicurigai (Visual)")
+                evidence.append("Indikasi perdarahan pada foto (suplemen)")
 
-    # 5. ESTIMASI SUMBER DAYA (Resources) untuk ESI 3, 4, 5
+    # 5. ESTIMASI TENAGA MEDIS (Enhanced Resource) untuk ESI 3, 4, 5
     # Menghitung estimasi maksimal dari keluhan yang dicocokkan
     estimated_resources = 0
-    combined_text_for_resources = " ".join([str(s) for s in symptoms]) + " " + complaint.lower()
+    medical_staff_breakdown = {
+        "dokter_umum": 0,
+        "dokter_spesialis": 0,
+        "perawat": 0,
+        "total": 0
+    }
     
-    for key_symptom, res_count in RESOURCE_ESTIMATE.items():
+    complaint_str = str(complaint) if complaint else ""
+    combined_text_for_resources = " ".join([str(s) for s in symptoms]) + " " + complaint_str.lower()
+    
+    # Use enhanced medical staff estimation
+    for key_symptom, staff_breakdown in MEDICAL_STAFF_ESTIMATE.items():
         if has_symptom(combined_text_for_resources, key_symptom):
-            estimated_resources = max(estimated_resources, res_count)
-            evidence.append(f"Gejala '{key_symptom}' diprediksi butuh {res_count} sumber daya IGD")
-            
+            if staff_breakdown["total"] > medical_staff_breakdown["total"]:
+                medical_staff_breakdown = staff_breakdown.copy()
+                estimated_resources = staff_breakdown["total"]
+                evidence.append(f"Gejala '{key_symptom}' diprediksi butuh: {staff_breakdown.get('dokter_umum', 0)} dokter umum, {staff_breakdown.get('dokter_spesialis', 0)} spesialis, {staff_breakdown.get('perawat', 0)} perawat")
+    
     # Usia lanjut / bayi yang demam membutuhkan lebih banyak evaluasi (lab/observasi)
     if (age is not None and age >= 65) or age_cat in ["infant", "toddler"]:
         if estimated_resources == 0 and has_symptom(combined_text_for_resources, "demam"):
-            estimated_resources = 1
+            estimated_resources = 2
+            medical_staff_breakdown = {"dokter_umum": 1, "dokter_spesialis": 0, "perawat": 1, "total": 2}
             evidence.append("Pasien risiko usia (Geriatri/Pediatri) dengan demam diprediksi butuh evaluasi medis")
 
     # 6. PENENTUAN LEVEL ESI (DECISION TREE LOGIC)
@@ -648,6 +1059,78 @@ def triage_engine(
 
     score = max(1, 6 - level)
 
+    # Process additional data for enhanced scoring
+    additional_score_modifier = 0
+    if additional_data:
+        # Psychological status impact
+        psych_status = additional_data.get("psychological_status", "")
+        if psych_status in ["Cemas berat", "Panik"]:
+            additional_score_modifier -= 0.5
+            evidence.append("Status psikologis berat meningkatkan risiko")
+        elif psych_status == "Bingung":
+            additional_score_modifier -= 0.3
+            evidence.append("Kebingungan meningkatkan risiko")
+        
+        # Symptom recurrence impact
+        symptom_rec = additional_data.get("symptom_recurrence", "")
+        if symptom_rec == "Gejala berulang":
+            additional_score_modifier -= 0.5
+            evidence.append("Gejala berulang menunjukkan kondisi kronis")
+        
+        # Lifestyle factors impact
+        smoking = additional_data.get("smoking_status", "")
+        if smoking == "Merokok aktif":
+            additional_score_modifier -= 0.3
+            evidence.append("Merokok aktif meningkatkan risiko kardiovaskular")
+        
+        alcohol = additional_data.get("alcohol_consumption", "")
+        if alcohol in ["Sering", "Sedang"]:
+            additional_score_modifier -= 0.2
+            evidence.append("Konsumsi alkohol meningkatkan risiko")
+        
+        # Activity level impact
+        activity = additional_data.get("activity_level", "")
+        if activity == "Tidak aktif":
+            additional_score_modifier -= 0.2
+            evidence.append("Gaya hidup tidak aktif meningkatkan risiko")
+        
+        # Current medications impact
+        meds = additional_data.get("current_medications", "")
+        if meds:
+            high_risk_meds = ["warfarin", "aspirin", "insulin", "metformin"]
+            if any(med in meds.lower() for med in high_risk_meds):
+                additional_score_modifier -= 0.3
+                evidence.append("Obat-obatan risiko tinggi terdeteksi")
+
+    # ML Enhancement enabled dengan optimized performance
+    enhanced_level = ml_enhance_triage_score(
+        symptoms=detected_symptoms,
+        vital_signs=vital_signs,
+        risk_factors=risk_factors,
+        photo_analysis=photo_analysis,
+        age=age,
+        pregnancy=pregnancy,
+        base_score=level
+    )
+    
+    # Apply additional data modifier
+    final_level = enhanced_level + additional_score_modifier
+    final_level = max(1, min(5, int(final_level)))  # Ensure integer and valid range
+    
+    # Medical entity detection dan specialist recommendation
+    detected_entities = detect_medical_entities(detected_symptoms, complaint)
+    specialist_recommendations = recommend_specialist(detected_entities, level, age)
+    
+    # Add medical entity detection to evidence
+    if detected_entities:
+        entity_names = [entity.replace("_", " ").title() for entity in detected_entities]
+        evidence.append(f"Deteksi medis: {', '.join(entity_names)}")
+    
+    # Update level jika enhanced scoring lebih konservatif
+    if final_level < level:
+        level = final_level
+        evidence.append(f"Enhanced scoring menurunkan level ke {level} berdasarkan analisis multidimensional dan data tambahan")
+    
     return TriageResult(
         level=level,
         label=TRIAGE_LABELS[level],
@@ -660,6 +1143,8 @@ def triage_engine(
         red_flags=list(set(red_flags + esi_1_symptoms)), # Gabungkan semua red flags unik
         estimated_resources=estimated_resources,
         evidence=evidence,
+        specialist_recommendations=specialist_recommendations,
+        medical_staff_breakdown=medical_staff_breakdown,
     )
 
 

@@ -28,6 +28,5 @@ def main() -> None:
         except Exception:
             backend.kill()
 
-
 if __name__ == "__main__":
     main()
