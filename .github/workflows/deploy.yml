@@ -37,12 +37,19 @@ jobs:
               if [ -f ".env.example" ]; then
                 cp .env.example .env
                 echo "⚠️  Copied .env.example to .env - configure manually if needed"
+              else
+                # Create minimal .env if no example exists
+                cat > .env << 'EOF'
+# Add your environment variables here
+ENVIRONMENT=production
+EOF
+                echo "⚠️  Created new .env file - configure with your settings"
               fi
             fi
             
-            # Stop old containers
+            # Stop old containers (suppress error if no containers exist)
             echo "🛑 Stopping old containers..."
-            docker compose down
+            docker compose down || true
             
             # Build and start new containers
             echo "🚀 Building and starting new containers..."
