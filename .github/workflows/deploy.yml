@@ -10,50 +10,60 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Deploy to Server via SSH
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          port: ${{ secrets.SERVER_PORT }}
-          script: |
-            DEPLOY_DIR="/home/goland/Teletriage"
-            REPO_URL="https://github.com/michaelgoland1-GLD/Teletriage.git"
-            
-            # Setup directory dan clone jika belum ada
-            if [ ! -d "$DEPLOY_DIR" ]; then
-              mkdir -p "$DEPLOY_DIR"
-              cd "$DEPLOY_DIR"
-              git clone "$REPO_URL" .
+      - name: Checkout code
+        uses: actions/checkout@v3
+        
+      - name: Deploy via SSH
+        env:
+          SSH_KEY: ${{ secrets.SERVER_SSHKEY }}
+          SSH_HOST: ${{ secrets.SERVER_HOST }}
+          SSH_PORT: ${{ secrets.SERVER_PORT }}
+          SSH_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          # Decode base64 key
+          echo "$SSH_KEY" | base64 -d > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+          
+          # Add host to known_hosts
+          mkdir -p ~/.ssh
+          ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          
+          # Deploy commands
+          ssh -i /tmp/deploy_key -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" << 'EOF'
+          DEPLOY_DIR="/home/goland/Teletriage"
+          REPO_URL="https://github.com/michaelgoland1-GLD/Teletriage.git"
+          
+          if [ ! -d "$DEPLOY_DIR" ]; then
+            mkdir -p "$DEPLOY_DIR"
+            cd "$DEPLOY_DIR"
+            git clone "$REPO_URL" .
+          else
+            cd "$DEPLOY_DIR"
+            git fetch origin
+            git reset --hard origin/main
+          fi
+          
+          if [ ! -f ".env" ]; then
+            if [ -f ".env.example" ]; then
+              cp .env.example .env
+              echo "Copied .env.example to .env"
             else
-              cd "$DEPLOY_DIR"
-              git fetch origin
-              git reset --hard origin/main
+              echo "ENVIRONMENT=production" > .env
+              echo "Created new .env file"
             fi
-            
-            # Copy .env jika belum ada
-            if [ ! -f ".env" ]; then
-              if [ -f ".env.example" ]; then
-                cp .env.example .env
-                echo "Copied .env.example to .env - configure manually if needed"
-              else
-                # Create minimal .env if no example exists
-                echo "ENVIRONMENT=production" > .env
-                echo "Created new .env file - configure with your settings"
-              fi
-            fi
-            
-            # Stop old containers
-            echo "Stopping old containers..."
-            docker compose down || true
-            
-            # Build and start new containers
-            echo "Building and starting new containers..."
-            docker compose up -d --build
-            
-            # Cleanup old images
-            echo "Cleaning up old images..."
-            docker image prune -f
-            
-            echo "✅ Deployment complete!"
+          fi
+          
+          echo "Stopping old containers..."
+          docker compose down || true
+          
+          echo "Starting new containers..."
+          docker compose up -d --build
+          
+          echo "Cleaning up old images..."
+          docker image prune -f
+          
+          echo "Deployment completed successfully!"
+          EOF
+          
+          # Cleanup
+          rm -f /tmp/deploy_key
