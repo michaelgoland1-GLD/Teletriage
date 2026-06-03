@@ -4,3 +4,7 @@ pydantic
 pillow
 psycopg2-binary
 fuzzywuzzy
+opencv-python
+python-Levenshtein
+numpy
+requests
