@@ -18,27 +18,38 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: ${{ secrets.SERVER_PORT }}
           script: |
+            DEPLOY_DIR="/home/goland/Teletriage"
+            REPO_URL="https://github.com/michaelgoland1-GLD/Teletriage.git"
+            
             # Setup directory dan clone jika belum ada
-            if [ ! -d "/opt/teletriage" ]; then
-              sudo mkdir -p /opt/teletriage
-              cd /opt/teletriage
-              git clone https://github.com/michaelgoland1-GLD/Teletriage.git .
+            if [ ! -d "$DEPLOY_DIR" ]; then
+              mkdir -p "$DEPLOY_DIR"
+              cd "$DEPLOY_DIR"
+              git clone "$REPO_URL" .
             else
-              cd /opt/teletriage
-              git pull origin main
+              cd "$DEPLOY_DIR"
+              git fetch origin
+              git reset --hard origin/main
             fi
             
             # Copy .env jika belum ada
             if [ ! -f ".env" ]; then
-              cp .env.example .env
-              echo "Please configure .env file manually"
+              if [ -f ".env.example" ]; then
+                cp .env.example .env
+                echo "⚠️  Copied .env.example to .env - configure manually if needed"
+              fi
             fi
             
             # Stop old containers
+            echo "🛑 Stopping old containers..."
             docker compose down
             
             # Build and start new containers
+            echo "🚀 Building and starting new containers..."
             docker compose up -d --build
             
             # Cleanup old images
+            echo "🧹 Cleaning up old images..."
             docker image prune -f
+            
+            echo "✅ Deployment complete!"
