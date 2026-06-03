@@ -12,7 +12,7 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-        
+      
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -20,6 +20,7 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSHKEY }}
           port: ${{ secrets.SERVER_PORT }}
+          key_type: 'base64'
           script: |
             DEPLOY_DIR="/home/goland/Teletriage"
             REPO_URL="https://github.com/michaelgoland1-GLD/Teletriage.git"
