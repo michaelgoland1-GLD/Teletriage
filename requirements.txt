@@ -10,3 +10,4 @@ python-multipart
 psycopg2-binary
 streamlit-autorefresh
 fuzzywuzzy
+opencv-python-headless
